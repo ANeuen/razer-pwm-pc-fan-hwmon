@@ -98,6 +98,87 @@ sudo modprobe razer_pwm_pc_fan_controller
 > Alternative Ubuntu-friendly method: `update-secureboot-policy --enroll-key` (uses the same underlying MOK flow). ([Ubuntu Wiki][3])
 
 ---
+## Installation (Bazzite)
+
+Bazzite uses SELinux in **Enforcing** mode, so the standard DKMS installation is not the preferred method for this controller. The repository includes a dedicated Bazzite installer that builds the module for the running kernel and installs it persistently.
+
+### 1) Install
+
+Run from the repository folder:
+
+```bash
+chmod +x install_bazzite.sh
+./install_bazzite.sh
+```
+
+The installer:
+
+* Builds the driver against the currently running Bazzite kernel.
+* Stores the driver source and build files persistently under `/usr/local/lib/razer-pwm-pc-fan`.
+* Creates and enables `razer-pwm-pc-fan.service`.
+* Automatically rebuilds the module if the running kernel changes.
+* Applies the SELinux `modules_object_t` label required for loading third-party kernel modules.
+* Loads the driver automatically at boot.
+* Automatically uses the Razer PWM controller's USB HID interface `00` and leaves the other HID interface alone.
+* Does not depend on the HID instance number (`.000D`, `.000F`, etc.), so the device can be moved to another USB port.
+* Starts the driver before `coolercontrold` so CoolerControl can detect the hwmon device during startup.
+
+The driver also automatically handles the controller being unplugged and reconnected.
+
+### 2) Reboot
+
+A reboot is recommended after installation:
+
+```bash
+systemctl reboot
+```
+
+After reboot, CoolerControl should automatically show the Razer PWM controller, including its RPM and PWM controls.
+
+### 3) Verify the service
+
+```bash
+systemctl status razer-pwm-pc-fan.service --no-pager -l
+```
+
+A successful installation should show:
+
+```text
+Active: active (exited)
+```
+
+and a message similar to:
+
+```text
+Razer fan-control interface 0003:1532:0F3C.xxxx successfully bound to razer_pwm_pc_fan_controller.
+```
+
+The `xxxx` HID instance number can change between boots or after reconnecting the USB device; this is normal.
+
+### 4) Uninstall
+
+Run from the repository folder:
+
+```bash
+chmod +x uninstall_bazzite.sh
+./uninstall_bazzite.sh
+```
+
+The uninstaller removes:
+
+* The Bazzite systemd service.
+* The CoolerControl systemd dependency.
+* The persistent driver files under `/usr/local/lib/razer-pwm-pc-fan`.
+
+A reboot is recommended after uninstalling.
+
+### Bazzite notes
+
+The Bazzite installer is specifically designed for this driver and should be used instead of manually copying the kernel module into `/usr/local` and loading it with `insmod`.
+
+Do **not** disable SELinux to load the driver. The installer applies the required `modules_object_t` SELinux type to the kernel module.
+
+The optional `99-razer-pwm-fan.rules` udev rule is not required for the Bazzite installation. The kernel driver's own USB/HID matching automatically claims interface `00`.
 
 ## Verify it works
 
@@ -179,8 +260,8 @@ Manual bind/unbind example (HID bus id looks like `0003:1532:0F3C.xxxx`):
 
 ```bash
 echo -n "0003:1532:0F3C.0001" | sudo tee /sys/bus/hid/drivers/hid-generic/unbind
-echo razer_pwm_pc_fan | sudo tee /sys/bus/hid/devices/0003:1532:0F3C.0001/driver_override
-echo -n "0003:1532:0F3C.0001" | sudo tee /sys/bus/hid/drivers/razer_pwm_pc_fan/bind
+echo razer_pwm_pc_fan_controller | sudo tee /sys/bus/hid/devices/0003:1532:0F3C.0001/driver_override
+echo -n "0003:1532:0F3C.0001" | sudo tee /sys/bus/hid/drivers/razer_pwm_pc_fan_controller/bind
 ```
 
 (Write your actual HID id.) ([Unix & Linux Stack Exchange][8])

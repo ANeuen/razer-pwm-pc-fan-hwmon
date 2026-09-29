@@ -30,6 +30,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/hid.h>
+#include <linux/usb.h>
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
 #include <linux/mutex.h>
@@ -71,7 +72,7 @@
 #define MODE_MANUAL 0x04
 
 // Timing
-#define DEVICE_READ_DELAY_MS   5
+#define DEVICE_READ_DELAY_MS   50
 #define DEVICE_READ_TIMEOUT_MS 500
 
 // Default when disabling manual control through pwmN_enable=0
@@ -127,7 +128,7 @@ struct razer_pwm_dev {
 
 	// RPM cache (avoid hammering device)
 	int rpm_cache[CHANNEL_COUNT];
-	unsigned long rpm_cache_jiffies;
+	unsigned long rpm_cache_jiffies[CHANNEL_COUNT];
 
 	struct delayed_work force_work;
 };
@@ -175,16 +176,42 @@ static u8 razer_next_seq(u8 *seq)
 
 static int razer_feature_set(struct hid_device *hdev, u8 report_id, u8 *buf, size_t len)
 {
-	// HID_FEATURE_REPORT + HID_REQ_SET_REPORT
-	return hid_hw_raw_request(hdev, report_id, buf, len, HID_FEATURE_REPORT, HID_REQ_SET_REPORT);
+	u8 *tmp;
+	int ret;
+
+	tmp = kmemdup(buf, len, GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
+	msleep(100);
+
+	ret = hid_hw_raw_request(hdev, report_id, tmp, len,
+							 HID_FEATURE_REPORT, HID_REQ_SET_REPORT);
+
+	kfree(tmp);
+
+	return ret;
 }
 
 static int razer_feature_get(struct hid_device *hdev, u8 report_id, u8 *buf, size_t len)
 {
-	// HID_FEATURE_REPORT + HID_REQ_GET_REPORT
-	return hid_hw_raw_request(hdev, report_id, buf, len, HID_FEATURE_REPORT, HID_REQ_GET_REPORT);
-}
+	u8 *tmp;
+	int ret;
 
+	tmp = kzalloc(len, GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
+	ret = hid_hw_raw_request(hdev, report_id, tmp, len,
+							 HID_FEATURE_REPORT, HID_REQ_GET_REPORT);
+
+	if (ret > 0)
+		memcpy(buf, tmp, min_t(size_t, ret, len));
+
+	kfree(tmp);
+
+	return ret;
+}
 // Write a packet and read the matching response.
 // Returns 0 on success; negative errno otherwise.
 //
@@ -203,6 +230,7 @@ static int razer_write_and_read(struct razer_pwm_dev *d, const u8 *tx, u8 *rx)
 	razer_hex_dump(d, "razer tx: ", tx, PKT_LEN);
 
 	ret = razer_feature_set(d->hdev, tx[0], (u8 *)tx, PKT_LEN);
+	razer_dbg(d, "SET_REPORT returned ret=%d\n", ret);
 	if (ret < 0)
 		return ret;
 
@@ -212,8 +240,11 @@ static int razer_write_and_read(struct razer_pwm_dev *d, const u8 *tx, u8 *rx)
 
 	do {
 		ret = razer_feature_get(d->hdev, tx[0], rx, PKT_LEN);
-		if (ret < 0)
+		if (ret < 0) {
+			razer_dbg(d, "GET_REPORT failed: ret=%d cmd=0x%02x channel=0x%02x\n",
+					  ret, tx[8], tx[10]);
 			return ret;
+		}
 		razer_hex_dump(d, "razer rx: ", rx, (size_t)ret);
 
 		// Some HID stacks could theoretically return a shorter read.
@@ -265,6 +296,7 @@ static int razer_write_and_read(struct razer_pwm_dev *d, const u8 *tx, u8 *rx)
 	if (rx[1] != ST_SUCCESS) {
 		hid_err(d->hdev, "device status error 0x%02x (seq=0x%02x)\n", rx[1], tx[2]);
 		return -EIO;
+
 	}
 
 	return 0;
@@ -320,7 +352,8 @@ static int razer_get_channel_speed(struct razer_pwm_dev *d, int channel, int *rp
 		return ret;
 
 	// Response stores RPM as big-endian int16 at Data[4..5] => rx[9+4], rx[9+5]
-	rpm = ((int)rx[13] << 8) | (int)rx[14];
+
+        rpm = ((int)rx[13] << 8) | (int)rx[14];
 	*rpm_out = rpm;
 	return 0;
 }
@@ -363,7 +396,7 @@ static int razer_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 		}
 
 		// Simple cache: read at most every ~200ms
-		if (time_before(jiffies, d->rpm_cache_jiffies + msecs_to_jiffies(200))) {
+		if (time_before(jiffies, d->rpm_cache_jiffies[channel] + msecs_to_jiffies(200))) {
 			*val = d->rpm_cache[channel];
 			ret = 0;
 			break;
@@ -372,7 +405,7 @@ static int razer_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 		ret = razer_get_channel_speed(d, channel, &rpm);
 		if (ret == 0) {
 			d->rpm_cache[channel] = rpm;
-			d->rpm_cache_jiffies = jiffies;
+			d->rpm_cache_jiffies[channel] = jiffies;
 			*val = rpm;
 		}
 		break;
@@ -467,9 +500,11 @@ static int razer_hwmon_write(struct device *dev, enum hwmon_sensor_types type,
 		break;
 	}
 
+
 	mutex_unlock(&d->lock);
 	return ret;
 }
+
 
 static umode_t razer_hwmon_is_visible(const void *data, enum hwmon_sensor_types type,
 				      u32 attr, int channel)
@@ -547,9 +582,15 @@ static void razer_force_workfn(struct work_struct *work)
 
 static int razer_pwm_probe(struct hid_device *hdev, const struct hid_device_id *id)
 {
-	struct razer_pwm_dev *d;
-	int ret, i;
-	u8 fw1 = 0, fw2 = 0, fw3 = 0;
+    struct razer_pwm_dev *d;
+    struct usb_interface *intf;
+    int ret, i;
+    u8 fw1 = 0, fw2 = 0, fw3 = 0;
+
+    intf = to_usb_interface(hdev->dev.parent);
+	if (intf->cur_altsetting->desc.bInterfaceNumber != 0) {
+		return -ENODEV;
+	}
 
 	d = devm_kzalloc(&hdev->dev, sizeof(*d), GFP_KERNEL);
 	if (!d)
@@ -576,8 +617,10 @@ static int razer_pwm_probe(struct hid_device *hdev, const struct hid_device_id *
 	ret = hid_hw_open(hdev);
 	if (ret) {
 		hid_err(hdev, "hid_hw_open failed: %d\n", ret);
-		goto stop;
+		hid_hw_stop(hdev);
+		return ret;
 	}
+
 
 	// Initialize cache and put all channels in manual + safe default.
 	mutex_lock(&d->lock);
@@ -585,8 +628,8 @@ static int razer_pwm_probe(struct hid_device *hdev, const struct hid_device_id *
 		d->pwm_enable[i]  = 0;
 		d->pwm_percent[i] = DEFAULT_SPEED_PERCENT;
 		d->rpm_cache[i]   = 0;
+                d->rpm_cache_jiffies[i] = 0;
 	}
-	d->rpm_cache_jiffies = 0;
 
 	for (i = 0; i < CHANNEL_COUNT; i++) {
 		(void)razer_set_channel_mode_manual(d, i);
@@ -618,7 +661,6 @@ static int razer_pwm_probe(struct hid_device *hdev, const struct hid_device_id *
 
 close:
 	hid_hw_close(hdev);
-stop:
 	hid_hw_stop(hdev);
 	return ret;
 }
