@@ -531,3 +531,36 @@ Linux 支持 `bind/unbind` 与 `driver_override` 强制绑定到特定驱动。 
 [6]: https://linux.die.net/man/8/fancontrol?utm_source=chatgpt.com "fancontrol(8) - Linux man page"
 [7]: https://www.kernel.org/doc/html/v6.1/driver-api/driver-model/binding.html?utm_source=chatgpt.com "Driver Binding — The Linux Kernel documentation"
 [8]: https://unix.stackexchange.com/questions/12005/how-to-use-linux-kernel-driver-bind-unbind-interface-for-usb-hid-devices?utm_source=chatgpt.com "How to use Linux kernel driver bind/unbind interface for ..."
+
+---
+
+## Installation (Fedora Workstation / KDE, non-Atomic)
+
+For regular DNF-based Fedora, use the Fedora-specific script. **Do not use this on Bazzite or Fedora Atomic.**
+
+```bash
+sudo dnf install -y git
+git clone https://github.com/ANeuen/razer-pwm-pc-fan-hwmon.git
+cd razer-pwm-pc-fan-hwmon
+sudo bash install_fedora.sh
+```
+
+The installer installs Fedora build dependencies, registers the Razer driver with DKMS for kernel updates, installs a systemd service to bind the controller's HID interface 00, and orders it before CoolerControl. It does **not** install CoolerControl itself.
+
+**Important:** A matching `kernel-devel` package must be available for the running kernel. If it is missing, update Fedora and reboot before retrying. With Secure Boot enabled, the kernel may reject the third-party module until DKMS signing and key enrollment are configured.
+
+After reboot, verify:
+
+```bash
+systemctl status razer-pwm-pc-fan.service --no-pager
+dkms status
+grep -R . /sys/class/hwmon/hwmon*/name | grep -i razer
+```
+
+To uninstall from the repository directory:
+
+```bash
+sudo bash uninstall_fedora.sh
+```
+
+**Note:** The Fedora installer is new and should be tested on actual Fedora hardware before being treated as production-ready.
