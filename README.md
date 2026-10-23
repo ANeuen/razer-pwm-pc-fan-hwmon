@@ -1,5 +1,7 @@
 # Repository name: **razer-pwm-pc-fan-hwmon**
 
+> **Fork attribution:** This repository is a fork of [SlimRG/razer-pwm-pc-fan-hwmon](https://github.com/SlimRG/razer-pwm-pc-fan-hwmon), originally created by **SlimRG**. Credit for the original Razer PWM PC Fan Controller Linux driver belongs to SlimRG. This fork adds installation and integration improvements for Bazzite and Fedora; it is not the original upstream project.
+
 ---
 
 ## README (EN)
