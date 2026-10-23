@@ -1,5 +1,12 @@
 # Repository name: **razer-pwm-pc-fan-hwmon**
 
+This repository is a fork of SlimRG/razer-pwm-pc-fan-hwmon, originally created by SlimRG.
+
+Fork created to provide Razor PWN sensor control for Coolercontrol in Fedora and Bazzite. Fork was created using Chat GPT, with manual confirmation of each step of creation to my limited abaility.
+Note the Bazzite installation scrip is for an atomic setup and Fedora instalaltion is for regular DNF-based Fedora
+
+Credit for the original Razer PWM PC Fan Controller Linux driver belongs to SlimRG. This fork adds installation and integration improvements for Bazzite and Fedora; it is not the original upstream project.
+
 ---
 
 ## README (EN)
